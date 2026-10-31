@@ -1,0 +1,1 @@
+alert http any any -> any any (msg:"CBB authorized HTTP pipeline marker"; flow:established,to_server; http.uri; content:"/cbb-supervisor-demo"; sid:9900001; rev:1; classtype:misc-activity;)

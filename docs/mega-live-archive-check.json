@@ -1,0 +1,23 @@
+{
+  "uploaded_and_verified": 7,
+  "previously_verified": 0,
+  "inventory_remote_path": "/CyberBlackBox/acceptance-tests/b904510e-754f-4f3f-8f1c-db846e86fb56/inventories/a784c7bb-a3cd-409a-8e8f-3775cefd0b81.inventory.json",
+  "protection": "VERIFIED_BACKUP_NOT_WORM",
+  "includes": "closed segments, manifests, artifacts, reports, checkpoints and metadata/custody snapshot",
+  "database_restore": "Use separate consistent database/key backup for full application recovery",
+  "at": "2026-10-30T04:15:33.669Z",
+  "scope": "Full application MEGA adapter against labelled synthetic acceptance data only; no original user evidence uploaded",
+  "object_types": [
+    "checkpoint",
+    "manifest",
+    "metadata-snapshot",
+    "report-package",
+    "segment"
+  ],
+  "restore_check": {
+    "verified": true,
+    "sha256": "017270fa2ddd6fcfe481446a901523d3b096382595046ec43ab40af4e48aa9e7",
+    "staging_path": "restore-staging\\8fa59c4b-0051-424c-9fad-10d6e122fff9\\46e7214e-01d9-47f0-ad2f-390bc3aa783c.zip",
+    "originals_replaced": false
+  }
+}

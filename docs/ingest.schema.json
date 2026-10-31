@@ -1,0 +1,93 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "cbb.ingest/1.0",
+      "default": "cbb.ingest/1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "boot_id": {
+      "maxLength": 64,
+      "minLength": 1,
+      "title": "Boot Id",
+      "type": "string"
+    },
+    "source_seq": {
+      "pattern": "^[0-9]{1,18}$",
+      "title": "Source Seq",
+      "type": "string"
+    },
+    "source_type": {
+      "enum": [
+        "windows.event",
+        "linux.journal",
+        "suricata.eve",
+        "zeek",
+        "fim",
+        "yara",
+        "acquisition",
+        "collector.health",
+        "lab.fixture"
+      ],
+      "title": "Source Type",
+      "type": "string"
+    },
+    "event_type": {
+      "maxLength": 120,
+      "minLength": 1,
+      "title": "Event Type",
+      "type": "string"
+    },
+    "collected_at": {
+      "maxLength": 64,
+      "title": "Collected At",
+      "type": "string"
+    },
+    "original_timestamp": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Original Timestamp"
+    },
+    "raw_media_type": {
+      "default": "application/json",
+      "maxLength": 100,
+      "title": "Raw Media Type",
+      "type": "string"
+    },
+    "raw_base64": {
+      "maxLength": 90000,
+      "title": "Raw Base64",
+      "type": "string"
+    },
+    "raw_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Raw Sha256",
+      "type": "string"
+    },
+    "source_cursor": {
+      "additionalProperties": true,
+      "title": "Source Cursor",
+      "type": "object"
+    }
+  },
+  "required": [
+    "boot_id",
+    "source_seq",
+    "source_type",
+    "event_type",
+    "collected_at",
+    "raw_base64",
+    "raw_sha256"
+  ],
+  "title": "WireEvent",
+  "type": "object"
+}

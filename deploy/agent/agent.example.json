@@ -1,0 +1,23 @@
+{
+  "server": "https://cbb.example.edu",
+  "collector_id": "REPLACE_WITH_ENROLLED_COLLECTOR_ID",
+  "asset_id": "REPLACE_WITH_ENROLLED_ASSET_ID",
+  "token": "REPLACE_WITH_ENROLLED_BEARER_CREDENTIAL",
+  "server_signing_key": "REPLACE_WITH_INDEPENDENTLY_VERIFIED_ED25519_PUBLIC_KEY",
+  "data": "/var/lib/cbb-agent",
+  "allowed_paths": ["/srv/cbb-lab/watched"],
+  "allowed_channels": ["System", "Application", "Security", "Microsoft-Windows-Sysmon/Operational"],
+  "enable_events": false,
+  "enable_acquisitions": false,
+  "eve_files": [],
+  "zeek_files": [],
+  "yara_rules": null,
+  "ca_file": "/etc/cbb-agent/ca.pem",
+  "cert_file": "/etc/cbb-agent/collector.pem",
+  "key_file": "/etc/cbb-agent/collector-key.pem",
+  "spool_bytes": 536870912,
+  "max_acquisition_bytes": 1073741824,
+  "enable_memory": false,
+  "memory_command": [],
+  "memory_tool_sha256": ""
+}

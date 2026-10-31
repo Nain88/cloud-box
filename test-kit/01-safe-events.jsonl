@@ -1,0 +1,6 @@
+{"timestamp":"2026-10-29T10:00:00Z","event_type":"process.create","process":"DEMO-editor.exe","process_guid":"CBB-DEMO-001","severity":1,"summary":"DEMO ONLY: editor process started"}
+{"timestamp":"2026-10-29T10:00:10Z","event_type":"file.create","path":"DEMO/notes.txt","process_guid":"CBB-DEMO-001","severity":2,"summary":"DEMO ONLY: notes file created"}
+{"timestamp":"2026-10-29T10:00:20Z","event_type":"network.connect","dst_ip":"192.0.2.10","process_guid":"CBB-DEMO-001","severity":2,"summary":"DEMO ONLY: simulated network observation"}
+{"timestamp":"2026-10-29T10:01:00Z","event_type":"auth.failure","user":"DEMO-user","severity":3,"summary":"DEMO ONLY: simulated failed sign-in"}
+{"timestamp":"2026-10-29T10:02:00Z","event_type":"yara.match","path":"DEMO/marker.txt","severity":3,"summary":"DEMO ONLY: simulated pattern match"}
+{"timestamp":"2026-10-29T10:03:00Z","event_type":"log.clear","severity":4,"summary":"DEMO ONLY: simulated log-clear observation"}

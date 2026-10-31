@@ -1,0 +1,22 @@
+name: cyber-black-box-virtual
+services:
+  app:
+    build: .
+    # Container interface is private; host publication is loopback only.
+    command: ["python", "-m", "uvicorn", "cbb.api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8765", "--no-proxy-headers"]
+    ports: ["127.0.0.1:8765:8765"]
+    environment:
+      CBB_MODE: virtual
+      CBB_DATA: /data
+      CBB_PUBLIC_URL: http://127.0.0.1:8765
+      CBB_ALLOW_SELF_APPROVAL: "false"
+    volumes: ["virtual-data:/data"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:size=300m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 3g
+    cpus: 2
+volumes:
+  virtual-data:

@@ -1,0 +1,11 @@
+{
+  "test": "Live official MEGAcmd 2.7.0 upload/download",
+  "at": "2026-10-30T04:14:07.007Z",
+  "remote_path": "/CyberBlackBox/connection-tests/0dafa3fb-bf47-4bf6-a4ae-3a407af935f0/0dafa3fb-bf47-4bf6-a4ae-3a407af935f0.txt",
+  "bytes": 138,
+  "local_sha256": "cbea5c855a98325ad736a778d46d0a61a9c9404895b6be76b8e9baf5a0ee30cb",
+  "download_sha256": "cbea5c855a98325ad736a778d46d0a61a9c9404895b6be76b8e9baf5a0ee30cb",
+  "match": true,
+  "scope": "Generated harmless test file only; no original user evidence; not a full application restore",
+  "initial_issue": "Test harness used mixed Windows slash; native path separator retry succeeded"
+}

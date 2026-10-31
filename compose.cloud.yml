@@ -1,0 +1,85 @@
+name: cyber-black-box-cloud
+services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: cbb
+      POSTGRES_DB: cbb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes: ["database:/var/lib/postgresql/data"]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cbb -d cbb"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 1g
+  signer:
+    build: .
+    command: ["python", "-m", "cbb.signer", "--host", "0.0.0.0", "--port", "8766", "--data", "/data"]
+    environment:
+      CBB_SIGNER_TOKEN: ${CBB_SIGNER_TOKEN:?Set CBB_SIGNER_TOKEN}
+    volumes: ["signer:/data"]
+    networks: [backend]
+    read_only: true
+    tmpfs: ["/tmp:mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request;r=urllib.request.Request('http://127.0.0.1:8766/public-key',headers={'Authorization':'Bearer '+os.environ['CBB_SIGNER_TOKEN']});urllib.request.urlopen(r,timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    mem_limit: 256m
+  app:
+    build: .
+    environment:
+      CBB_MODE: cloud
+      CBB_DATABASE_URL: postgresql+psycopg://cbb:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db/cbb
+      CBB_PUBLIC_URL: https://${CBB_HOST:?Set CBB_HOST}
+      CBB_SECURE_COOKIES: "true"
+      CBB_REQUIRE_MTLS: "true"
+      CBB_PROXY_SECRET: ${CBB_PROXY_SECRET:?Set CBB_PROXY_SECRET}
+      CBB_SIGNER_URL: http://signer:8766
+      CBB_SIGNER_TOKEN: ${CBB_SIGNER_TOKEN:?Set CBB_SIGNER_TOKEN}
+      CBB_WITNESS_URL: ${CBB_WITNESS_URL:-}
+      CBB_WITNESS_PUBLIC_KEY: ${CBB_WITNESS_PUBLIC_KEY:-}
+      CBB_WITNESS_INDEPENDENT: ${CBB_WITNESS_INDEPENDENT:-false}
+      CBB_S3_BUCKET: ${CBB_S3_BUCKET:-}
+      CBB_S3_ENDPOINT: ${CBB_S3_ENDPOINT:-}
+      CBB_S3_RETENTION_MODE: ${CBB_S3_RETENTION_MODE:-GOVERNANCE}
+      CBB_S3_RETENTION_DAYS: ${CBB_S3_RETENTION_DAYS:-90}
+    depends_on:
+      db: {condition: service_healthy}
+      signer: {condition: service_healthy}
+    volumes: ["archive:/data"]
+    networks: [backend, egress]
+    read_only: true
+    tmpfs: ["/tmp:size=300m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    mem_limit: 3g
+    cpus: 2
+  proxy:
+    image: nginx:1.28-bookworm
+    ports: ["443:443"]
+    environment:
+      CBB_HOST: ${CBB_HOST:?Set CBB_HOST}
+      CBB_PROXY_SECRET: ${CBB_PROXY_SECRET:?Set CBB_PROXY_SECRET}
+    volumes:
+      - ./deploy/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./secrets/tls:/etc/nginx/tls:ro
+    depends_on: [app]
+    networks: [backend, egress]
+    restart: unless-stopped
+    mem_limit: 128m
+networks:
+  backend: {internal: true}
+  egress:
+volumes:
+  database:
+  archive:
+  signer:
