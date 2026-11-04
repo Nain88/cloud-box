@@ -1,5 +1,7 @@
 # Implementation status and acceptance
 
+**4 November 2026 update.** See [Windows live acceptance](LIVE-ACCEPTANCE.md) and [Windows demo steps](WINDOWS-LIVE-DEMO.md) for current native Suricata, firewall and Ollama results. Earlier installation observations below are historical.
+
 All twelve proposal modules have executable implementation paths. This is not a claim that every architectural stretch feature, operating-system configuration or external product is installed and certified.
 
 ## Scope and proposal traceability

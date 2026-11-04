@@ -1,0 +1,31 @@
+# Windows live monitoring — supervisor walkthrough
+
+**Is laptop par Windows Firewall, native Suricata/Npcap aur Ollama use hote hain. Ubuntu ya VM is demonstration ke liye zaroori nahi hai.**
+
+1. Project folder mein `Start-Cyber-Black-Box.cmd` kholen. Agar server pehle se chal raha hai to doosri copy kholne ki zaroorat nahi. Browser mein `http://127.0.0.1:8765/#live` kholen aur apne existing account se sign in karein.
+2. **Live monitor → Sensor coverage** mein recent heartbeat, readable firewall file aur EVE sensor ke `RUNNING`, `fresh` aur `interface` fields dekhein. Recent heartbeat ke saath bhi koi input unavailable ho sakta hai. **Incoming preserved logs** mein source chunen. Feed visible tab mein har 5 seconds latest 100 sealed records dikhata hai. Backlog ki surat mein receipt aur alert creation mein deri hoti hai. Purani history **Evidence explorer** mein milti hai.
+3. **Suricata test.** Is laptop ki launcher configuration `Wi-Fi` par 15-minute session start karti hai. Capture ke dauran alag PowerShell mein neeche wali harmless command chalayein. HTTP 404 aana mumkin hai. Test request ka URI dekhta hai. Source `suricata.eve` chunen ya Evidence explorer mein `CBB authorized HTTP pipeline marker` search karein.
+
+   ```powershell
+   curl.exe --noproxy '*' --max-time 15 http://example.com/cbb-supervisor-demo
+   ```
+
+4. **Firewall test.** Administrator PowerShell mein project folder se `powershell -ExecutionPolicy Bypass -File .\scripts\test-firewall-pipeline.ps1` chalayein. Ye sirf documentation IP `192.0.2.123` ke chhay test ports ko temporary outbound rule se block karta hai. Windows `DROP` records banata hai. Script rule hata kar result `sensor-data\firewall-test.json` mein likhti hai. Evidence explorer mein `192.0.2.123` search karein aur Alerts mein `FW-PORT-BURST/1.0` dekhein. Ye controlled local activity hai. Ek unknown source ke asli attack ka saboot alag investigation se milta hai.
+5. **Evidence aur report.** Record kholen aur source, receipt time, raw hash aur custody dekhein. Relevant records ko ek chhotay investigation case mein add karein. **Evidence assistant** mein wohi case aur `Ollama` chunen. Analyst cited evidence inspect kar ke review record kare. **Reports & exports** se case ka signed ZIP generate karein. ZIP mein PDF, editable DOCX, selected original bytes aur verification material hota hai.
+6. **Dobara capture shuru karna.** 15 minutes baad network capture ruk jata hai. Windows event aur firewall collector dashboard ke saath chalte rehte hain. `sensor-data\sensor-status.json` mein `STOPPED` check kar ke project folder se yeh command chalayein.
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\start-suricata-windows.ps1 -InterfaceAlias 'Wi-Fi' -Seconds 900 -MaxMiB 256
+   ```
+
+**Coverage aur storage.** Native engine chosen adapter par traffic dekhta hai. Encrypted HTTPS payloads normally unreadable hain. Rule set mein shipped protocol-event signatures, two local web indicators aur ek clearly labelled demonstration marker hain. A signature match needs review. Windows NIC checksum offload can create misleading checksum indicators. The capture profile limits repeats of seven checksum signatures per source per minute. Suricata checks its output budget every two seconds; a burst can overshoot. Existing files count toward the budget. Preserve them before starting another session if the directory is at capacity.
+
+**Source gaps.** Windows System and Application collection starts with up to 100 existing records per configured channel. Security log collection requires suitable audit policy, read access and enabling the channel. Recent signed collector health reports expose queue pressure and source errors. An incomplete firewall line is retained until its newline arrives. A malformed complete line is preserved and marked `firewall.unparsed`. A rotated file may lose unread older bytes. If a later Windows log rotation resets file permissions, run `scripts\grant-firewall-read.ps1` in Administrator PowerShell and check for a fresh readable heartbeat. The original firewall logging settings were saved under `sensor-data\firewall-before.json`; `scripts\restore-firewall-logging.ps1` restores logging settings.
+
+**Reinstalling on another laptop.** Install the publisher's Windows Suricata package and Npcap with WinPcap-compatible mode. Run `scripts\setup-firewall.ps1` and `scripts\grant-firewall-read.ps1` from Administrator PowerShell. Set up the dashboard administrator, stop its server and run `.\.venv\Scripts\python.exe scripts\provision-local-sensor.py` locally. This creates a dedicated collector and owner-visible intake case. Choose a connected adapter with `Get-NetAdapter`. To start a bounded native capture with the project launcher, save `{"interface":"Wi-Fi"}` to `sensor-data\native-capture.json` using your adapter name. Install Ollama and run `ollama pull qwen2.5:0.5b` for the local language model. No installer, private evidence, session token or signing key is included in the source release.
+
+**Official references.** [Suricata Windows download](https://suricata.io/download/), [Npcap installer guide](https://npcap.com/guide/npcap-users-guide.html), [Windows Firewall logging](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/configure-logging), [Ollama on Windows](https://docs.ollama.com/windows).
+
+## Zeek ka controlled test
+
+Windows par project ne Brim Data ka Zeek 7.0.0 build test kiya. Yeh older build sirf apne controlled loopback packet capture ke replay ke liye hai. Live Wi-Fi detection Suricata karta hai. `scripts/install-zeek-windows.ps1` signing keys ya collector credentials ke baghair versioned binary install karta hai. Existing enrolled collector ke local `zeek_files` mein project ki `sensor-data/zeek/conn.log` file configure karen aur collector reload karen. Project folder se `.\.venv\Scripts\python.exe scripts/test-zeek-loopback.py` chalayein. Command ek local HTTP request capture karti hai aur Zeek ka original JSON record collector input mein append karti hai. Tools & sensors par Check tools click karein. Evidence explorer mein source `zeek` select karein. [Build source](https://github.com/brimdata/build-zeek/releases/tag/v7.0.0-brim1).

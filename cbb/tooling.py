@@ -39,8 +39,12 @@ def mega_command(verb, *args, timeout=600):
 
 def tool_probe(name, argument="--version"):
     candidate=os.getenv("CBB_"+name.upper()+"_EXECUTABLE") or shutil.which(name)
-    if not candidate or not Path(candidate).is_file():return {"state":"NOT_INSTALLED","version":None}
+    if not candidate and name=='zeek' and os.name=='nt':
+        candidate=str(Path(os.environ['LOCALAPPDATA'])/'Programs/CyberBlackBox/zeek-v7.0.0-brim1/zeek/bin/zeek.exe')
+    if not candidate and name=='suricata' and os.name=='nt':
+        candidate=str(Path(os.environ['ProgramFiles'])/'Suricata/suricata.exe')
     try:
+        if not candidate or not Path(candidate).is_file():return {"state":"NOT_INSTALLED","version":None}
         code,output=bounded_process([candidate,argument],8)
         return {"state":"AVAILABLE" if code==0 else "ERROR","version":output[:300],"path":candidate}
     except (OSError,subprocess.TimeoutExpired):return {"state":"ERROR","version":None}

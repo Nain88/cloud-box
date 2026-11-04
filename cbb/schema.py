@@ -55,6 +55,17 @@ def normalize(wire, collector, evidence_id, received_at, raw_ref):
             subject={"src_ip":data.get("src_ip"),"dst_ip":data.get("dest_ip"),"src_port":data.get("src_port"),"dst_port":data.get("dest_port"),"flow_id":str(data.get("flow_id",""))}
             if isinstance(data.get("alert"),dict): severity={1:5,2:4,3:3}.get(data["alert"].get("severity"),2)
             occurred=parse_time(data.get("timestamp")) or occurred
+        elif wire['source_type']=='zeek':
+            from pathlib import PureWindowsPath
+            kind=PureWindowsPath(str(wire.get('source_cursor',{}).get('path',''))).stem
+            if kind not in {'conn','http','dns','ssl','notice'}:kind='observation'
+            event_type='zeek.'+kind
+            subject={key:data[field] for key,field in {'src_ip':'id.orig_h','dst_ip':'id.resp_h','src_port':'id.orig_p','dst_port':'id.resp_p','uid':'uid','protocol':'proto'}.items() if field in data}
+            try:
+                occurred=parse_time(datetime.fromtimestamp(float(data['ts']),timezone.utc).isoformat())
+            except (KeyError,ValueError,TypeError,OverflowError,OSError):pass
+            if occurred and 'UNKNOWN_EVENT_TIME' in flags:flags.remove('UNKNOWN_EVENT_TIME')
+            details['summary']=f"Zeek {kind}: {subject.get('src_ip','?')} → {subject.get('dst_ip','?')} ({subject.get('uid','unknown UID')})"
         else:
             subject={k:data.get(k) for k in ("user","process","process_guid","pid","parent","path","src_ip","dst_ip","dst_port","action") if k in data}
             severity=max(0,min(5,int(data.get("severity",1))))

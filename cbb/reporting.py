@@ -7,10 +7,12 @@ from .crypto import loads
 
 def reports(case,version,entries,notes,verification,custody,ai):
     sections=[("Case report",case["title"]),("Scope",case.get("description") or "No scope recorded."),("Snapshot",f"Case {case['id']} · Version {version} · Status {case['status']}"),("Analyst conclusion",case.get("conclusion") or "No analyst conclusion recorded."),("Integrity",f"{verification['status']} / {verification['assurance']}; {verification['checked']} evidence records checked. Local verification is not independent witnessing or proof of truthful capture.")]
-    for item in entries:
+    if len(entries)>100 or len(custody)>100:
+        sections.append(("Reading this report",f"Showing the first {min(len(entries),100)} of {len(entries)} selected evidence records and {min(len(custody),100)} of {len(custody)} custody entries. The signed ZIP contains the complete selected evidence, manifest and custody.json."))
+    for item in entries[:100]:
         sections.append(("Evidence · "+item["id"],f"Sequence: {item['sequence']}\nSource: {item['source_type']}\nEvent: {item['event_type']}\nOccurred: {item['occurred_at'] or 'Unknown'}\nReceived: {item['received_at']}\nObservation: {item['summary']}\nRaw SHA-256: {item['raw_sha256']}\nRecord hash: {item['record_hash']}\nOriginal bytes: {item['raw_path']}"))
     for note in notes:sections.append(("Analyst note · "+note["id"],f"Author: {note['author_id']} · {note['created_at']}\nSupersedes: {note.get('previous_id') or 'None'}\n{note['body']}"))
-    for item in custody:sections.append(("Custody · "+str(item["sequence"]),f"{item['created_at']} · {item['actor']}\n{item['action']} → {item['target']}\nEntry hash: {item['entry_hash']}"))
+    for item in custody[:100]:sections.append(("Custody · "+str(item["sequence"]),f"{item['created_at']} · {item['actor']}\n{item['action']} → {item['target']}\nEntry hash: {item['entry_hash']}"))
     for item in ai:
         document=loads(item["document"]);review=loads(item.get("review"),{})
         sections.append(("Derived AI assistance · "+item["id"],f"Engine: {item['engine']}\nReview: {review.get('decision','UNREVIEWED')}\n{document['advice']['summary']}\nThis is derived advice, not original evidence. Full output, citations and review are in ai-assistance.json."))

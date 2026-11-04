@@ -21,6 +21,7 @@
     "source_type": {
       "enum": [
         "windows.event",
+        "windows.firewall",
         "linux.journal",
         "suricata.eve",
         "zeek",

@@ -40,9 +40,11 @@ def test_firewall_backpressure_preserves_record_cursor(tmp_path):
 
 def test_firewall_burst_real_pipeline_and_no_attack_claim_for_single_drop(service):
     events=[wire(str(i),raw=record(1000+i),source_type='windows.firewall',event_type='firewall.drop',raw_media_type='text/plain',original_timestamp='2026-10-30T16:10:00',source_cursor={'fields':FIELDS}) for i in range(1,7)]
-    accepted=service.accept(service.test_collector,events);service.seal_pending()
+    accepted=service.accept(service.test_collector,events[:1]);service.seal_pending()
     service.analyze(accepted[0]['evidence_id'])
     with service.db.read() as c:assert not rows(c,select(D.alerts))
+    accepted+=service.accept(service.test_collector,events[1:]);service.seal_pending()
+    with service.db.read() as c:assert len(rows(c,select(D.alerts)))==1
     for item in accepted:service.analyze(item['evidence_id'])
     with service.db.read() as c:
         alerts=rows(c,select(D.alerts));assert len(alerts)==1
@@ -73,3 +75,14 @@ def test_live_scope_and_opt_in_intake(app_client):
 def test_firewall_bad_fields_and_ip():
     with pytest.raises(ValueError):parse_record(record(),[])
     with pytest.raises(ValueError):parse_record(record().replace(b'192.0.2.10',b'not-an-ip'),FIELDS)
+
+def test_unknown_firewall_row_preserved_without_stalling(tmp_path):
+    source=tmp_path/'firewall.log'
+    damaged=b'incomplete vendor row\xff\n'
+    source.write_bytes(('#Fields: '+' '.join(FIELDS)+'\n').encode()+damaged+record())
+    agent=Agent({'server':'http://127.0.0.1:8765','token':'test'},root=tmp_path/'spool',client=httpx.Client())
+    tail_firewall(agent,source)
+    events=[json.loads(r['body']) for r in agent.spool.batch()]
+    assert [e['event_type'] for e in events]==['firewall.unparsed','firewall.drop']
+    assert base64.b64decode(events[0]['raw_base64'])==damaged
+    agent.close()

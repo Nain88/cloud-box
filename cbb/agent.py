@@ -413,7 +413,7 @@ class Agent:
             offset = 0
         with path.open("rb") as source:
             source.seek(offset)
-            for _ in range(100):
+            for _ in range(300):
                 line = source.readline(MAX_EVENT + 1)
                 if not line:
                     break
@@ -583,7 +583,12 @@ class Agent:
             self.acquire(job)
 
     def cycle(self, reconcile=False):
-        operations = [("heartbeat", self.heartbeat), ("transport", self.flush), ("windows", self.windows_events), ("journal", self.linux_journal)]
+        def deliver():
+            for _ in range(4):
+                self.flush()
+                backlog=self.spool.status()
+                if backlog['queued']<100 and backlog['awaiting_seal']<100:break
+        operations = [("heartbeat", self.heartbeat), ("transport", deliver), ("windows", self.windows_events), ("journal", self.linux_journal)]
         from .firewall import tail_firewall
         for path in self.config.get('firewall_files', []):
             operations.append(('firewall:' + path, lambda p=path: tail_firewall(self, p)))
@@ -617,6 +622,7 @@ class Agent:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="agent-data/agent.json", help="Local collector credentials and policy file; do not commit it")
+    parser.add_argument('--stop-file', type=Path, help='Exit after the current cycle when the launcher creates this file')
     commands = parser.add_subparsers(dest="command", required=True)
     enrollment = commands.add_parser("enroll", help="Consume a ten-minute enrollment token and save pinned credentials")
     enrollment.add_argument("--server", required=True)
@@ -668,6 +674,12 @@ def main():
         spool.close()
         return
     data_root.mkdir(parents=True, exist_ok=True)
+    from .cli import exclusive
+    with exclusive(data_root):
+        run_collection(config,data_root,args)
+
+
+def run_collection(config,data_root,args):
     handler = RotatingFileHandler(data_root / "agent.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logging.getLogger().addHandler(handler)
@@ -678,7 +690,7 @@ def main():
         else:
             cycle = 0
             failures = 0
-            while True:
+            while not (args.stop_file and args.stop_file.exists()):
                 agent.cycle(reconcile=cycle % 12 == 0)
                 cycle += 1
                 failures = failures + 1 if "heartbeat" in agent.errors or "transport" in agent.errors else 0

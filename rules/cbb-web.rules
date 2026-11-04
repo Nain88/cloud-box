@@ -1,0 +1,3 @@
+# Indicators for analyst review. These match known clear-text HTTP patterns.
+alert http any any -> any any (msg:"CBB possible traversal to Unix password file"; flow:established,to_server; http.uri.raw; content:"../"; content:"etc/passwd"; nocase; sid:9900010; rev:1; classtype:web-application-attack;)
+alert http any any -> any any (msg:"CBB request for exposed Git configuration"; flow:established,to_server; http.uri; content:"/.git/config"; nocase; sid:9900011; rev:1; classtype:web-application-activity;)

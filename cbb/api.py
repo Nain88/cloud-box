@@ -24,6 +24,7 @@ from . import db as D
 from .crypto import uid, now, sha, file_sha, canon, dumps, loads, strict_json, atomic_write, verify_signature
 from .service import Service, DomainError, row, rows
 from .config import Settings
+from .runtime_status import host_status
 
 log=logging.getLogger("cbb")
 passwords=PasswordHasher()
@@ -469,12 +470,13 @@ def create_app(settings=None):
         return {"version":version+1,"views":views}
 
     @app.get("/api/v1/alerts")
-    def alert_list(u=Depends(user)):
+    def alert_list(order:str=Query('risk',pattern='^(risk|newest)$'),u=Depends(user)):
         with service.db.read() as c:
             scope=service.scope_evidence(u)
             query=select(D.alerts).join(D.evidence,D.evidence.c.id==D.alerts.c.evidence_id)
             if scope is not None:query=query.where(scope)
-            result=rows(c,query.order_by(D.alerts.c.risk.desc()).limit(200))
+            sort=D.alerts.c.created_at.desc() if order=='newest' else D.alerts.c.risk.desc()
+            result=rows(c,query.order_by(sort,D.alerts.c.id).limit(200))
             for r in result:r["components"]=loads(r["components"],{})
             return result
 
@@ -637,7 +639,7 @@ def create_app(settings=None):
         with service.db.read() as c:
             quarantined=rows(c,select(D.receipts.c.id,D.receipts.c.source_seq,D.receipts.c.error,D.receipts.c.received_at).where(D.receipts.c.state=="QUARANTINED").limit(100))
             config=rows(c,select(D.config).where(D.config.c.id!="deployment"))
-        return {"mode":service.settings.mode,"database":"sqlite" if service.db.sqlite else "postgresql","worker":worker_errors,"quarantined":quarantined,"configuration":config,"integrations":{"yara":True,"suricata":bool(shutil.which("suricata")),"s3":bool(service.settings.s3_bucket),"signer":"remote" if service.settings.signer_url else "local","witness":bool(service.settings.witness_url)},"data_directory":str(service.root),"disk_free":shutil.disk_usage(service.root).free}
+        return {"mode":service.settings.mode,"database":"sqlite" if service.db.sqlite else "postgresql","worker":worker_errors,"quarantined":quarantined,"configuration":config,"integrations":{"yara":True,"suricata":host_status()["suricata"]["state"]=="AVAILABLE","s3":bool(service.settings.s3_bucket),"signer":"remote" if service.settings.signer_url else "local","witness":bool(service.settings.witness_url)},"data_directory":str(service.root),"disk_free":shutil.disk_usage(service.root).free}
 
     @app.post("/api/v1/admin/replicate",status_code=202)
     def replicate(u=Depends(admin)):

@@ -59,7 +59,7 @@ def host_status():
                 firewall = {'state': 'UNAVAILABLE', 'profiles': [], 'detail': 'Cannot query Windows Firewall from this server account'}
             # Do not start WSL just to probe the web dashboard. The collector
             # heartbeat reports whether the actual WSL capture process is alive.
-            suricata['detail'] = 'Windows server probe. WSL capture state is in collector network inputs.'
+            suricata['detail'] = 'Native Windows binary probe. Check collector EVE status for actual adapter activity.'
         value = {'checked_at': now(), 'firewall': firewall, 'ollama': ollama_status(), 'suricata': suricata}
         _cache.update(at=time.monotonic(), value=value)
         return value

@@ -173,6 +173,14 @@ class Service:
                     c.execute(update(D.chains).where(D.chains.c.id==chain["id"]).values(head_sequence=seq,head_hash=digest))
                     c.execute(update(D.receipts).where(D.receipts.c.id==receipt["id"]).values(state="SEALED"))
                     self.audit(c,collector["id"],"EVIDENCE_SEALED",receipt["evidence_id"],details={"sequence":str(seq)})
+                    # Publish sensor indicators in the sealing transaction so a
+                    # queue of historical correlation jobs cannot hide a fresh match.
+                    if env['source_type'] in {'suricata.eve','windows.firewall'}:
+                        item=row(c,select(D.evidence).where(D.evidence.c.id==receipt['evidence_id']))
+                        if env['event_type']=='network.alert':self.record_indicator(c,item)
+                        elif env['event_type']=='firewall.drop':
+                            from .detection import firewall_burst
+                            firewall_burst(self,c,item,env)
                     intake=loads(collector['configuration']).get('intake_case_id')
                     if intake:
                         case=row(c,select(D.cases).where(D.cases.c.id==intake))
@@ -310,16 +318,20 @@ class Service:
         jid=uid();c.execute(D.jobs.insert().values(id=jid,kind=kind,state="QUEUED",actor_id=actor,case_id=case_id,payload=dumps(payload),operation_key=key,progress=0,attempts=0,next_attempt=0,created_at=now(),updated_at=now()))
         return jid
 
+    def record_indicator(self,c,item):
+        event_type=item['event_type']
+        if item['severity']<3 and event_type not in {'log.clear','registry.change','auth.failure','yara.match','network.alert'}:return
+        key='rule-v1:'+item['id']
+        if row(c,select(D.alerts.c.id).where(D.alerts.c.dedup_key==key)):return
+        c.execute(D.alerts.insert().values(id=uid(),evidence_id=item['id'],asset_id=item['asset_id'],rule_id='rules-v1/'+event_type,severity=item['severity'],risk=item['severity']*20,explanation=f"{item['summary']} ({event_type}). Inspect original evidence and source context.",status='NEW',components=dumps({'severity':item['severity']/5,'model':'not_scored'}),created_at=now(),dedup_key=key))
+
     def analyze(self,evidence_id):
         with self.db.tx() as c:
             item=row(c,select(D.evidence).where(D.evidence.c.id==evidence_id));env=loads(item["envelope"])
-            risk=item["severity"]*20;etype=item["event_type"]
+            etype=item["event_type"]
             from .detection import firewall_burst
             firewall_burst(self,c,item,env)
-            if item["severity"]>=3 or etype in ("log.clear","registry.change","auth.failure","yara.match"):
-                dedup="rule-v1:"+evidence_id
-                if not row(c,select(D.alerts).where(D.alerts.c.dedup_key==dedup)):
-                    c.execute(D.alerts.insert().values(id=uid(),evidence_id=evidence_id,asset_id=item["asset_id"],rule_id="rules-v1/"+etype,severity=item["severity"],risk=risk,explanation="Observed "+etype+"; severity mapped by parser 1.0.0. Review original evidence.",status="NEW",components=dumps({"severity":item["severity"]/5,"model":"not_scored"}),created_at=now(),dedup_key=dedup))
+            self.record_indicator(c,item)
             if etype.startswith(("file.","fim.","network.")) and item["occurred_at"]:
                 current=datetime.fromisoformat(item["occurred_at"].replace("Z","+00:00"))
                 candidates=rows(c,select(D.evidence).where(and_(D.evidence.c.asset_id==item["asset_id"],D.evidence.c.event_type=="process.create")).order_by(D.evidence.c.sequence.desc()).limit(200))
@@ -333,14 +345,19 @@ class Service:
                             c.execute(D.incidents.insert().values(id=uid(),asset_id=item["asset_id"],title="Process followed by "+etype,confidence=.9 if same else .45,rule_id="C01/1.0",version=1,evidence_ids=dumps([prev["id"],evidence_id]),decisions="[]",created_at=now(),dedup_key=key))
                         break
 
-    def make_export(self,case_id,actor_id,evidence_ids,case_version,case_snapshot=None,notes_snapshot=None,ai_snapshot=None):
-        cp=self.checkpoint(actor_id);verification=self.verify(cp)
+    def make_export(self,case_id,actor_id,evidence_ids,case_version,case_snapshot=None,notes_snapshot=None,ai_snapshot=None,job_id=None):
+        def progress(value):
+            if job_id:
+                with self.db.tx() as c:c.execute(update(D.jobs).where(D.jobs.c.id==job_id).values(progress=value,updated_at=now()))
+        progress(5)
+        cp=self.checkpoint(actor_id);progress(10);verification=self.verify(cp);progress(30)
         if verification["status"]=="INVALID":raise ValueError("Export blocked: archive verification failed")
         package_id=uid();path=self.root/"exports"/(package_id+".zip")
         entries=[];files={}
         with self.db.read() as c:
             case=case_snapshot or row(c,select(D.cases).where(D.cases.c.id==case_id))
-            for eid in evidence_ids:
+            for index,eid in enumerate(evidence_ids):
+                if index and index%500==0:progress(30+int(40*index/len(evidence_ids)))
                 item=row(c,select(D.evidence).where(D.evidence.c.id==eid))
                 if not item:raise ValueError("Selected evidence no longer available")
                 raw=self.read_raw(c,item)
@@ -353,12 +370,17 @@ class Service:
             proofs=rows(c,select(D.evidence.c.sequence,D.evidence.c.envelope_sha256,D.evidence.c.previous_hash,D.evidence.c.record_hash).where(D.evidence.c.sequence<=head).order_by(D.evidence.c.sequence))
             for p in proofs:p["sequence"]=str(p["sequence"])
             note_list=notes_snapshot if notes_snapshot is not None else rows(c,select(D.notes).where(D.notes.c.case_id==case_id).order_by(D.notes.c.created_at))
-            custody=rows(c,select(D.custody).where(or_(D.custody.c.target.in_([case_id,*evidence_ids]),D.custody.c.action=="EXPORT_REQUESTED")).order_by(D.custody.c.sequence))
-            custody=[{**r,"envelope":loads(r["envelope"])} for r in custody if r["target"] in {case_id,*evidence_ids}]
+            targets=list(dict.fromkeys([case_id,*evidence_ids]))
+            custody=[]
+            for offset in range(0,len(targets),500):
+                custody.extend(rows(c,select(D.custody).where(D.custody.c.target.in_(targets[offset:offset+500]))))
+            custody.sort(key=lambda r:r['sequence'])
+            custody=[{**r,"envelope":loads(r["envelope"])} for r in custody]
             ai=ai_snapshot or []
         files["proof.json"]=canon(proofs);files["checkpoint.json"]=canon(cp);files["verification.json"]=canon(verification)
         files["notes.json"]=canon(note_list)
         files["case.json"]=canon(case);files["custody.json"]=canon(custody);files["ai-assistance.json"]=canon(ai)
+        progress(75)
         from .reporting import reports
         files["report.docx"],files["report.pdf"]=reports(case,case_version,entries,note_list,verification,custody,ai)
         report=f"<!doctype html><meta charset='utf-8'><title>Cyber Black Box case report</title><style>body{{font:16px system-ui;max-width:900px;margin:4rem auto;line-height:1.6}}table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #ccc;padding:8px}}</style><h1>{escape(case['title'])}</h1><p>Case {escape(case_id)} · Snapshot version {case_version}</p><p>{escape(case['description'] or '')}</p><h2>Analyst conclusion</h2><p>{escape(case['conclusion'] or 'No conclusion recorded.')}</p><h2>Evidence</h2><ul>"+"".join(f"<li>{escape(e['id'])} — sequence {e['sequence']}</li>" for e in entries)+f"</ul><h2>Integrity</h2><p>{escape(verification['status'])} · {escape(verification['assurance'])}</p><p>This report concerns selected captured observations. It does not establish completeness, source truth, attack attribution or legal admissibility.</p>"
@@ -366,6 +388,7 @@ class Service:
         files["README.txt"]=b"Verify with: cbb verify-package case.zip --public-key <separately trusted base64 key>\nThe key inside a package must not be trusted solely because it arrived with that package. report.html is the readable report.\n"
         manifest={"package_id":package_id,"case_id":case_id,"case_version":case_version,"generated_at":now(),"evidence":entries,"files":[{"path":name,"size":str(data.stat().st_size if isinstance(data,Path) else len(data)),"sha256":file_sha(data) if isinstance(data,Path) else sha(data)} for name,data in files.items()]}
         files["manifest.json"]=canon(manifest);files["manifest.signature.json"]=canon(self.signed("CBB-EXPORT-v1",manifest))
+        progress(90)
         with zipfile.ZipFile(path,"w",zipfile.ZIP_DEFLATED) as z:
             for name,data in files.items():
                 if isinstance(data,Path):z.write(data,name)
@@ -408,7 +431,7 @@ class Service:
                 c.execute(D.verifications.insert().values(id=uid(),job_id=job["id"],result=dumps(result),created_at=now()))
                 self.audit(c,job["actor_id"],"VERIFICATION_COMPLETED",job["id"],result["status"])
             return result
-        if job["kind"]=="export":return self.make_export(job["case_id"],job["actor_id"],payload["evidence_ids"],payload["case_version"],payload.get("case_snapshot"),payload.get("notes_snapshot"),payload.get("ai_snapshot"))
+        if job["kind"]=="export":return self.make_export(job["case_id"],job["actor_id"],payload["evidence_ids"],payload["case_version"],payload.get("case_snapshot"),payload.get("notes_snapshot"),payload.get("ai_snapshot"),job_id=job["id"])
         if job["kind"]=="mega-backup":
             from .cloud import replicate_mega
             return replicate_mega(self,payload)
@@ -431,11 +454,19 @@ class Service:
         raise ValueError("Unknown job type")
 
     def tick(self,background=False):
-        if not background:self.seal_pending()
+        if background:
+            self._run_next_job(True)
+            return
+        self.seal_pending()
+        deadline=time.monotonic()+1.0
+        for _ in range(50):
+            if time.monotonic()>=deadline or not self._run_next_job(False):break
+
+    def _run_next_job(self,background):
         with self.db.tx() as c:
             kind_filter=D.jobs.c.kind!="analyze" if background else D.jobs.c.kind=="analyze"
             job=row(c,select(D.jobs).where(and_(D.jobs.c.state=="QUEUED",D.jobs.c.next_attempt<=time.time(),kind_filter)).order_by(D.jobs.c.created_at).limit(1))
-            if job:c.execute(update(D.jobs).where(D.jobs.c.id==job["id"]).values(state="RUNNING",attempts=job["attempts"]+1,updated_at=now()))
+            if job:c.execute(update(D.jobs).where(D.jobs.c.id==job["id"]).values(state="RUNNING",error=None,progress=0,attempts=job["attempts"]+1,updated_at=now()))
         if job:
             try:
                 result=self.run_job(job)
@@ -444,6 +475,7 @@ class Service:
                 with self.db.tx() as c:
                     attempts=job["attempts"]+1
                     c.execute(update(D.jobs).where(D.jobs.c.id==job["id"]).values(state="FAILED" if attempts>=3 else "QUEUED",next_attempt=time.time()+min(600,5**attempts),error=type(ex).__name__+": "+str(ex)[:400],updated_at=now()))
+        return job is not None
     def maintenance(self):
         """Periodic anchoring is independent of slow transfer/model jobs."""
         with self.db.read() as c:latest=row(c,select(D.checkpoints).order_by(D.checkpoints.c.sequence.desc()).limit(1))

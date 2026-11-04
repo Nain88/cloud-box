@@ -1,5 +1,7 @@
 # Build validation — 29 October 2026
 
+**4 November 2026 update.** See [Windows live acceptance](LIVE-ACCEPTANCE.md) and [Windows demo steps](WINDOWS-LIVE-DEMO.md) for current native Suricata, firewall and Ollama results. Earlier installation observations below are historical.
+
 Executed in the Windows project workspace:
 
 | Check | Result |

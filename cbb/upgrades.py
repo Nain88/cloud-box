@@ -110,8 +110,9 @@ def register_upgrade_routes(app,service,user,admin,investigator):
     def analyze(body:AnalysisRequest,u=Depends(investigator)):
         with service.db.tx() as c:
             case=service.allowed_case(c,u,body.case_id,write=True)
-            ids=[r["evidence_id"] for r in rows(c,select(D.case_evidence.c.evidence_id).where(and_(D.case_evidence.c.case_id==case["id"],D.case_evidence.c.active==True)))]
-            if not ids or len(ids)>300:raise DomainError("AI_SCOPE","Use a case containing 1–300 evidence records for bounded local analysis",422)
+            query=select(D.evidence.c.id).join(D.case_evidence,D.case_evidence.c.evidence_id==D.evidence.c.id).where(and_(D.case_evidence.c.case_id==case['id'],D.case_evidence.c.active==True)).order_by(D.evidence.c.sequence.desc()).limit(300)
+            ids=[r['id'] for r in rows(c,query)]
+            if not ids:raise DomainError('AI_SCOPE','Add evidence to this case before requesting analysis',422)
             job=service.create_job(c,"ai-assist",u["id"],{**body.model_dump(),"actor_id":u["id"],"evidence_ids":ids,"case_version":case["version"]},case["id"])
             service.audit(c,u["id"],"AI_ANALYSIS_REQUESTED",case["id"],details={"job_id":job,"engine":body.engine,"evidence_count":len(ids)})
         return {"job_id":job}

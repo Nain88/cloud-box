@@ -4,7 +4,7 @@ import ipaddress
 
 def parse_record(raw, fields):
     values = raw.decode('utf-8', errors='strict').strip().split()
-    if not fields or len(values) != len(fields):
+    if not isinstance(fields,list) or not 1<=len(fields)<=64 or not all(isinstance(field,str) for field in fields) or len(values)!=len(fields):
         raise ValueError('Firewall record does not match its #Fields header')
     record = dict(zip(fields, values))
     if record.get('action') not in {'DROP', 'ALLOW'}:
@@ -44,7 +44,7 @@ def tail_firewall(agent, path):
                 break
             if len(raw) > MAX_EVENT:
                 raise ValueError('Firewall line exceeds 64 KiB; cursor retained')
-            text = raw.decode('utf-8', errors='strict').strip()
+            text = raw.decode('utf-8', errors='replace').strip()
             if text.startswith('#Fields:'):
                 fields = text[len('#Fields:'):].split()
             elif text.startswith('#Time Format:'):
@@ -53,7 +53,13 @@ def tail_firewall(agent, path):
             if not text or text.startswith('#'):
                 agent.spool.set(key, next_cursor)
                 continue
-            record = parse_record(raw, fields)
+            try:
+                record = parse_record(raw, fields)
+            except (ValueError, KeyError):
+                # Preserve malformed/unknown vendor rows and continue at the
+                # next complete line. Normalization marks this record unparsed.
+                agent.spool.enqueue(raw, 'windows.firewall', 'firewall.unparsed', 'text/plain', cursor=next_cursor, cursor_key=key)
+                continue
             # Windows local wall-clock timestamps are ambiguous at DST changes.
             # Preserve that timestamp without inventing a timezone.
             stamp = record.get('date', '') + 'T' + record.get('time', '')

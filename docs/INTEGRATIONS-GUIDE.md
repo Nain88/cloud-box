@@ -1,5 +1,7 @@
 # Genuine tools and end-to-end demonstration
 
+**4 November 2026 update.** See [Windows live acceptance](LIVE-ACCEPTANCE.md) and [Windows demo steps](WINDOWS-LIVE-DEMO.md) for current native Suricata, firewall and Ollama results. Earlier installation observations below are historical.
+
 Updated 30 October 2026. Source and built dashboard live in:
 `C:\Users\PC Tecnologies\Documents\ChatGPT\cloud box`
 

@@ -1,5 +1,7 @@
 # Integration and implementation audit — 30 October 2026
 
+**4 November 2026 update.** See [Windows live acceptance](LIVE-ACCEPTANCE.md) and [Windows demo steps](WINDOWS-LIVE-DEMO.md) for current native Suricata, firewall and Ollama results. Earlier installation observations below are historical.
+
 This is a source review and bounded functional validation, not an independent penetration test, legal certification or a guarantee of zero errors. The original proposal is mapped to M01–M12 in README.md. This revision extends M04, M07, M08, M10 and M12 without introducing a hardware deployment profile.
 
 ## Implemented data flow
