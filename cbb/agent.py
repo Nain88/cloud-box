@@ -56,6 +56,18 @@ class Spool:
             CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY,digest TEXT,size INTEGER,mtime INTEGER);
             CREATE TABLE IF NOT EXISTS acquisitions (id TEXT PRIMARY KEY,state TEXT NOT NULL,artifact TEXT,upload_id TEXT,error TEXT,updated_at TEXT NOT NULL);
         """)
+        self.db.executescript("""
+            BEGIN IMMEDIATE;
+            CREATE TABLE IF NOT EXISTS spool_usage (id INTEGER PRIMARY KEY CHECK(id=1), bytes INTEGER NOT NULL);
+            INSERT OR REPLACE INTO spool_usage SELECT 1, COALESCE(SUM(LENGTH(CAST(body AS BLOB))),0) FROM events;
+            CREATE TRIGGER IF NOT EXISTS spool_usage_insert AFTER INSERT ON events BEGIN
+                UPDATE spool_usage SET bytes=bytes+LENGTH(CAST(NEW.body AS BLOB)) WHERE id=1;
+            END;
+            CREATE TRIGGER IF NOT EXISTS spool_usage_delete AFTER DELETE ON events BEGIN
+                UPDATE spool_usage SET bytes=bytes-LENGTH(CAST(OLD.body AS BLOB)) WHERE id=1;
+            END;
+            COMMIT;
+        """)
         self.db.commit()
         boot_signature = sha(str(int(psutil.boot_time())).encode())[:32]
         self.boot_id = self.get("boot_signature")
@@ -78,7 +90,7 @@ class Spool:
         with self.lock:
             try:
                 self.db.execute("BEGIN IMMEDIATE")
-                used = self.db.execute("SELECT COALESCE(SUM(LENGTH(body)),0) FROM events").fetchone()[0]
+                used = self.db.execute("SELECT bytes FROM spool_usage WHERE id=1").fetchone()[0]
                 if used + len(raw) * 2 + 2048 > self.max_bytes or shutil.disk_usage(self.root).free < 50 * 1024 * 1024:
                     raise SpoolFull("Spool capacity reached; collection paused without advancing source cursors")
                 old = self.db.execute("SELECT value FROM meta WHERE key='sequence'").fetchone()
@@ -108,8 +120,9 @@ class Spool:
     def status(self):
         with self.lock:
             counts = dict(self.db.execute("SELECT state,COUNT(*) FROM events GROUP BY state").fetchall())
-            used = self.db.execute("SELECT COALESCE(SUM(LENGTH(body)),0) FROM events").fetchone()[0]
-        return {"queued": counts.get("QUEUED", 0), "awaiting_seal": counts.get("STAGED", 0), "quarantined": counts.get("QUARANTINED", 0), "blocked": counts.get("BLOCKED", 0), "bytes": used, "max_bytes": self.max_bytes}
+            used = self.db.execute("SELECT bytes FROM spool_usage WHERE id=1").fetchone()[0]
+        allocated = sum(path.stat().st_size for path in self.root.glob("spool.sqlite3*") if path.exists())
+        return {"allocated_bytes": allocated, "queued": counts.get("QUEUED", 0), "awaiting_seal": counts.get("STAGED", 0), "quarantined": counts.get("QUARANTINED", 0), "blocked": counts.get("BLOCKED", 0), "bytes": used, "max_bytes": self.max_bytes}
 
     def close(self):
         self.db.close()
@@ -644,6 +657,7 @@ def main():
     commands.add_parser("status", help="Inspect local queue and policy without contacting the server")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     path = Path(args.config).resolve()
     if args.command == "enroll":
         if path.exists():

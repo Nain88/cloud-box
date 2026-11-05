@@ -20,6 +20,7 @@ def main():
     p.add_argument('--label', required=True)
     p.add_argument('--seconds', type=int, default=900)
     p.add_argument('--max-mib', type=int, default=256)
+    p.add_argument('--continuous', action='store_true')
     args = p.parse_args()
     if not 30 <= args.seconds <= 86400 or not 16 <= args.max_mib <= 4096:
         p.error('Select 30–86400 seconds and 16–4096 MiB')
@@ -32,7 +33,7 @@ def main():
     lock = output / 'sensor.lock'
     with lock.open('x') as f:
         f.write(str(os.getpid()))
-    info = {'platform':'Windows/Npcap', 'scope':'Traffic on the selected adapter only', 'interface':args.label, 'state':'STARTING','started_at':timestamp()}
+    info = {'platform':'Windows/Npcap', 'scope':'Traffic on the selected adapter only', 'interface':args.label, 'mode':'continuous' if args.continuous else 'lab', 'state':'STARTING','started_at':timestamp()}
     manifest = output / 'sensor-status.json'
     def save():
         info['updated_at'] = timestamp()
@@ -56,7 +57,10 @@ def main():
             threshold.write_text(''.join(f'threshold gen_id 1, sig_id {sid}, type limit, track by_src, count 1, seconds 60\n' for sid in range(2200073,2200080)),encoding='ascii')
         info['threshold_sha256']=hashlib.sha256(threshold.read_bytes()).hexdigest()
         command=[str(exe),'-c',str(config),'-S',str(rules),'-l',str(output),'--set','threshold-file='+str(threshold),'-k','none','--runmode','single']
-        with (output/'windows-console.log').open('ab') as console:
+        console_path = output/'windows-console.log'
+        if console_path.exists() and console_path.stat().st_size >= 4*1024**2:
+            console_path.replace(output/'windows-console.previous.log')
+        with console_path.open('ab') as console:
             subprocess.run(command+['-T'],cwd=install,stdout=console,stderr=subprocess.STDOUT,check=True,timeout=120)
             child=subprocess.Popen(command+['-i',args.device],cwd=install,stdout=console,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
             started=time.monotonic();info.update(pid=child.pid,state='RUNNING')
@@ -65,10 +69,10 @@ def main():
                 info.update(output_bytes=size);save()
                 if size>=args.max_mib*1024**2:
                     info['reason']='DISK_BUDGET_REACHED';break
-                if time.monotonic()-started>=args.seconds:
+                if not args.continuous and time.monotonic()-started>=args.seconds:
                     info['reason']='DURATION_REACHED';break
                 time.sleep(2)
-            if child.poll() is not None and child.returncode:
+            if child.poll() is not None and (child.returncode or args.continuous):
                 raise RuntimeError(f'Suricata exited {child.returncode}. Inspect sensor-data/windows-console.log')
     except KeyboardInterrupt:
         info['reason']='OPERATOR_STOP'

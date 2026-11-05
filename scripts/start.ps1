@@ -41,6 +41,7 @@ print(json.loads(entry[0])['id'] if entry else '')
         throw "Port $Port is serving a different deployment. Check the data directory and port."
     }
 }
+& (Join-Path $PSScriptRoot 'protect-windows-keys.ps1') -Data $Data
 & $pythonExe -m cbb.cli --data $Data init
 if ($LASTEXITCODE -ne 0) { throw 'Initialization failed.' }
 $bootstrapPath = Join-Path $Data 'keys\bootstrap.token'

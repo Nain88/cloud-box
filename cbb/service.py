@@ -231,7 +231,7 @@ class Service:
                     c.execute(D.witness_receipts.insert().values(id=uid(),checkpoint_id=cp["id"],receipt=dumps(receipt),independent=self.settings.witness_independent,created_at=now()))
                     self.audit(c,"system","CHECKPOINT_WITNESSED",cp["id"])
 
-    def verify(self,checkpoint_doc=None):
+    def verify(self,checkpoint_doc=None,check_budget=lambda: None):
         failures=[];checked=0;unavailable=0
         with self.db.read() as c:
             latest=row(c,select(D.checkpoints).order_by(D.checkpoints.c.sequence.desc()).limit(1))
@@ -242,6 +242,7 @@ class Service:
                 except Exception:failures.append({"code":"BAD_SIGNATURE","target":"checkpoint"})
             previous_cp="0"*64
             for cp_index, saved in enumerate(rows(c,select(D.checkpoints).order_by(D.checkpoints.c.sequence)),1):
+                check_budget()
                 try:
                     doc=loads(saved["document"]);value=verify_signature(doc,"CBB-CHECKPOINT-v1",self.deployment["public_key"])
                     if saved["sequence"]!=cp_index or int(value["checkpoint_seq"])!=cp_index or value["previous_checkpoint_sha256"]!=previous_cp or value["deployment_id"]!=self.deployment["id"] or sha(canon(doc))!=saved["sha256"]:
@@ -253,6 +254,7 @@ class Service:
             for purpose,table,hash_col in (("evidence",D.evidence,"record_hash"),("custody",D.custody,"entry_hash")):
                 chain=self.chain(c,purpose);previous=chain["genesis"];expected=1;heads={0:previous}
                 for item in rows(c,select(table).order_by(table.c.sequence)):
+                    check_budget()
                     if item["sequence"]!=expected:failures.append({"code":"MISSING_RECORD","target":purpose,"sequence":expected})
                     if item["previous_hash"]!=previous:failures.append({"code":"BROKEN_LINK","target":item["id"]})
                     digest=chain_hash(previous,item["sequence"],item["envelope"])
@@ -277,6 +279,7 @@ class Service:
                     anchor=next((h for h in trusted["chains"] if h["purpose"]==purpose),None)
                     if not anchor or anchor["id"]!=chain["id"] or anchor.get("genesis")!=chain["genesis"] or heads.get(int(anchor["sequence"]))!=anchor["head_hash"]:failures.append({"code":"CHECKPOINT_MISMATCH","target":purpose})
             for seg in rows(c,select(D.segments).where(D.segments.c.closed==True)):
+                check_budget()
                 try:
                     if sha((self.root/seg["path"]).read_bytes())!=seg["sha256"]:failures.append({"code":"SEGMENT_MISMATCH","target":seg["id"]})
                 except OSError:failures.append({"code":"SEGMENT_UNAVAILABLE","target":seg["id"]})
@@ -290,6 +293,7 @@ class Service:
                             if sha(manifest)!=seg["manifest_sha256"]:failures.append({"code":"MANIFEST_MODIFIED","target":seg["id"]})
                         except OSError:failures.append({"code":"MANIFEST_UNAVAILABLE","target":seg["id"]})
             for artifact in rows(c,select(D.artifacts)):
+                check_budget()
                 try:
                     import hashlib
                     digest=hashlib.sha256()
@@ -346,11 +350,17 @@ class Service:
                         break
 
     def make_export(self,case_id,actor_id,evidence_ids,case_version,case_snapshot=None,notes_snapshot=None,ai_snapshot=None,job_id=None):
+        deadline = time.monotonic() + self.settings.export_timeout_seconds
+        def check_budget():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Export execution budget exceeded")
+
         def progress(value):
+            check_budget()
             if job_id:
                 with self.db.tx() as c:c.execute(update(D.jobs).where(D.jobs.c.id==job_id).values(progress=value,updated_at=now()))
         progress(5)
-        cp=self.checkpoint(actor_id);progress(10);verification=self.verify(cp);progress(30)
+        cp=self.checkpoint(actor_id);progress(10);verification=self.verify(cp,check_budget);progress(30)
         if verification["status"]=="INVALID":raise ValueError("Export blocked: archive verification failed")
         package_id=uid();path=self.root/"exports"/(package_id+".zip")
         entries=[];files={}
@@ -389,15 +399,28 @@ class Service:
         manifest={"package_id":package_id,"case_id":case_id,"case_version":case_version,"generated_at":now(),"evidence":entries,"files":[{"path":name,"size":str(data.stat().st_size if isinstance(data,Path) else len(data)),"sha256":file_sha(data) if isinstance(data,Path) else sha(data)} for name,data in files.items()]}
         files["manifest.json"]=canon(manifest);files["manifest.signature.json"]=canon(self.signed("CBB-EXPORT-v1",manifest))
         progress(90)
-        with zipfile.ZipFile(path,"w",zipfile.ZIP_DEFLATED) as z:
-            for name,data in files.items():
-                if isinstance(data,Path):z.write(data,name)
-                else:z.writestr(name,data)
-        digest=file_sha(path)
+        staging = path.with_suffix(".part")
+        try:
+            with zipfile.ZipFile(staging, "w", zipfile.ZIP_DEFLATED) as archive:
+                for name, data in files.items():
+                    check_budget()
+                    if isinstance(data, Path):
+                        archive.write(data, name)
+                    else:
+                        archive.writestr(name, data)
+            digest = file_sha(staging)
+            check_budget()
+            os.replace(staging, path)
+        finally:
+            staging.unlink(missing_ok=True)
+        result = {"export_id":package_id,"sha256":digest,"verification":verification}
         with self.db.tx() as c:
             c.execute(D.exports.insert().values(id=package_id,case_id=case_id,case_version=case_version,path=str(path.relative_to(self.root)),sha256=digest,manifest=dumps(manifest),created_at=now()))
             self.audit(c,actor_id,"EXPORT_CREATED",package_id,details={"case_id":case_id,"sha256":digest})
-        return {"export_id":package_id,"sha256":digest,"verification":verification}
+            if job_id:
+                c.execute(update(D.jobs).where(D.jobs.c.id==job_id).values(
+                    state="COMPLETE", progress=100, result=dumps(result), error=None, updated_at=now()))
+        return result
 
     def replicate(self):
         if not self.settings.s3_bucket:return {"status":"NOT_CONFIGURED"}
@@ -453,18 +476,24 @@ class Service:
             return process_pcap(self,payload)
         raise ValueError("Unknown job type")
 
-    def tick(self,background=False):
+    def tick(self,background=False, lane=None):
         if background:
-            self._run_next_job(True)
+            self._run_next_job(True, lane)
             return
         self.seal_pending()
         deadline=time.monotonic()+1.0
         for _ in range(50):
             if time.monotonic()>=deadline or not self._run_next_job(False):break
 
-    def _run_next_job(self,background):
+    def _run_next_job(self,background,lane=None):
         with self.db.tx() as c:
             kind_filter=D.jobs.c.kind!="analyze" if background else D.jobs.c.kind=="analyze"
+            if lane == "reports":
+                kind_filter = D.jobs.c.kind == "export"
+            elif lane == "ai":
+                kind_filter = D.jobs.c.kind == "ai-assist"
+            elif lane == "general":
+                kind_filter = ~D.jobs.c.kind.in_(("analyze", "export", "ai-assist"))
             job=row(c,select(D.jobs).where(and_(D.jobs.c.state=="QUEUED",D.jobs.c.next_attempt<=time.time(),kind_filter)).order_by(D.jobs.c.created_at).limit(1))
             if job:c.execute(update(D.jobs).where(D.jobs.c.id==job["id"]).values(state="RUNNING",error=None,progress=0,attempts=job["attempts"]+1,updated_at=now()))
         if job:
@@ -474,7 +503,9 @@ class Service:
             except Exception as ex:
                 with self.db.tx() as c:
                     attempts=job["attempts"]+1
-                    c.execute(update(D.jobs).where(D.jobs.c.id==job["id"]).values(state="FAILED" if attempts>=3 else "QUEUED",next_attempt=time.time()+min(600,5**attempts),error=type(ex).__name__+": "+str(ex)[:400],updated_at=now()))
+                    terminal = attempts>=3 or isinstance(ex, TimeoutError) or (
+                        isinstance(ex, DomainError) and (ex.status<500 or ex.code=="AI_TIMEOUT"))
+                    c.execute(update(D.jobs).where(D.jobs.c.id==job["id"]).values(state="FAILED" if terminal else "QUEUED",next_attempt=time.time()+min(600,5**attempts),error=type(ex).__name__+": "+str(ex)[:400],updated_at=now()))
         return job is not None
     def maintenance(self):
         """Periodic anchoring is independent of slow transfer/model jobs."""
@@ -491,6 +522,9 @@ class Service:
 
     def recover_jobs(self):
         with self.db.tx() as c:
-            c.execute(update(D.jobs).where(D.jobs.c.state=="RUNNING").values(state="QUEUED",error="Worker restarted; idempotent task rescheduled"))
+            c.execute(update(D.jobs).where(D.jobs.c.state=="RUNNING", D.jobs.c.attempts>=3).values(
+                state="FAILED", error="Worker interrupted and retry budget exhausted", updated_at=now()))
+            c.execute(update(D.jobs).where(D.jobs.c.state=="RUNNING").values(
+                state="QUEUED", progress=0, error=None, next_attempt=0, updated_at=now()))
             c.execute(update(D.acquisitions).where(D.acquisitions.c.state.in_(["LEASED","RUNNING"])).values(state="NEEDS_REVIEW",updated_at=now()))
 

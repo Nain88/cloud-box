@@ -39,7 +39,7 @@ def test_firewall_backpressure_preserves_record_cursor(tmp_path):
     agent.close()
 
 def test_firewall_burst_real_pipeline_and_no_attack_claim_for_single_drop(service):
-    events=[wire(str(i),raw=record(1000+i),source_type='windows.firewall',event_type='firewall.drop',raw_media_type='text/plain',original_timestamp='2026-10-30T16:10:00',source_cursor={'fields':FIELDS}) for i in range(1,7)]
+    events=[wire(str(i),raw=record(1000+i),source_type='windows.firewall',event_type='firewall.drop',raw_media_type='text/plain',original_timestamp='2026-10-30T16:10:00Z',source_cursor={'fields':FIELDS}) for i in range(1,7)]
     accepted=service.accept(service.test_collector,events[:1]);service.seal_pending()
     service.analyze(accepted[0]['evidence_id'])
     with service.db.read() as c:assert not rows(c,select(D.alerts))
@@ -48,10 +48,10 @@ def test_firewall_burst_real_pipeline_and_no_attack_claim_for_single_drop(servic
     for item in accepted:service.analyze(item['evidence_id'])
     with service.db.read() as c:
         alerts=rows(c,select(D.alerts));assert len(alerts)==1
-        assert alerts[0]['rule_id']=='FW-PORT-BURST/1.0'
+        assert alerts[0]['rule_id']=='FW-PORT-BURST/2.0'
         assert 'Possible scan' in alerts[0]['explanation'] and 'replay' in alerts[0]['explanation']
         item=row(c,select(D.evidence));assert service.read_raw(c,item)==record(1001)
-        assert item['occurred_at'] is None and 'UNKNOWN_EVENT_TIME' in loads(item['envelope'])['quality_flags']
+        assert item['occurred_at'] and 'DELAYED_EVENT' in loads(item['envelope'])['quality_flags']
 
 def test_live_scope_and_opt_in_intake(app_client):
     app,client=app_client;s=app.state.service
@@ -86,3 +86,27 @@ def test_unknown_firewall_row_preserved_without_stalling(tmp_path):
     assert [e['event_type'] for e in events]==['firewall.unparsed','firewall.drop']
     assert base64.b64decode(events[0]['raw_base64'])==damaged
     agent.close()
+
+def test_firewall_replay_does_not_group_events_from_different_minutes(service):
+    events = [
+        wire(str(i), raw=record(2000+i), source_type="windows.firewall",
+             event_type="firewall.drop", raw_media_type="text/plain",
+             original_timestamp=f"2026-10-30T16:{i*2:02d}:00Z", source_cursor={"fields": FIELDS})
+        for i in range(1, 7)
+    ]
+    service.accept(service.test_collector, events)
+    service.seal_pending()
+    with service.db.read() as c:
+        assert len(rows(c, select(D.evidence))) == 6
+        assert not rows(c, select(D.alerts))
+
+
+def test_report_lane_skips_older_ai_job(service, monkeypatch):
+    with service.db.tx() as c:
+        ai = service.create_job(c, "ai-assist", "system", {})
+        report = service.create_job(c, "export", "system", {})
+    monkeypatch.setattr(service, "run_job", lambda job: {"kind": job["kind"]})
+    service.tick(background=True, lane="reports")
+    with service.db.read() as c:
+        assert row(c, select(D.jobs).where(D.jobs.c.id == report))["state"] == "COMPLETE"
+        assert row(c, select(D.jobs).where(D.jobs.c.id == ai))["state"] == "QUEUED"

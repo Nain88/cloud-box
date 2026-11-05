@@ -34,7 +34,7 @@ def public_user(user):return {k:user[k] for k in ("id","username","role","active
 def create_app(settings=None):
     service=Service(settings)
     stop=threading.Event()
-    worker_errors={"last_error":None,"last_tick":None}
+    worker_errors={"last_error":None,"last_tick":None,"lanes":{}}
 
     def worker():
         while not stop.is_set():
@@ -45,10 +45,18 @@ def create_app(settings=None):
                 worker_errors["last_error"]=type(ex).__name__+": "+str(ex)[:200]
             stop.wait(.5)
 
-    def background_worker():
+    lanes = {name: {"last_tick": None, "last_error": None} for name in ("reports", "ai", "general")}
+
+    worker_errors["lanes"] = lanes
+
+    def background_worker(lane):
         while not stop.is_set():
-            try:service.tick(background=True)
-            except Exception:log.exception("Background task failed")
+            try:
+                service.tick(background=True, lane=lane)
+                lanes[lane].update(last_tick=now(), last_error=None)
+            except Exception as ex:
+                lanes[lane].update(last_tick=now(), last_error=type(ex).__name__)
+                log.exception("Background worker %s failed", lane)
             stop.wait(1)
 
     def anchor_worker():
@@ -60,15 +68,18 @@ def create_app(settings=None):
     @asynccontextmanager
     async def lifespan(app):
         service.recover_jobs()
-        thread=None;maintenance=None;anchors=None
+        thread=None;maintenance=[];anchors=None
         if service.settings.workers:
             thread=threading.Thread(target=worker,daemon=True);thread.start()
-            maintenance=threading.Thread(target=background_worker,daemon=True);maintenance.start()
+            for lane in lanes:
+                runner = threading.Thread(target=background_worker, args=(lane,), daemon=True)
+                maintenance.append(runner)
+                runner.start()
             anchors=threading.Thread(target=anchor_worker,daemon=True);anchors.start()
         yield
         stop.set()
         if thread:thread.join(timeout=10)
-        if maintenance:maintenance.join(timeout=10)
+        for runner in maintenance:runner.join(timeout=10)
         if anchors:anchors.join(timeout=10)
 
     app=FastAPI(title="Cyber Black Box",version="0.1.0",lifespan=lifespan,docs_url="/api/docs" if service.settings.mode=="virtual" else None,openapi_url="/api/openapi.json" if service.settings.mode=="virtual" else None)
@@ -129,6 +140,8 @@ def create_app(settings=None):
 
     def admin(u=Depends(user)):
         if u["role"]!="admin":raise DomainError("FORBIDDEN","Administrator role required",403)
+        if (service.settings.mode == "cloud" or service.settings.admin_mfa_required) and not u["totp_secret"]:
+            raise DomainError("MFA_SETUP_REQUIRED", "Enable MFA in account settings before using administrator controls", 403)
         return u
 
     def investigator(u=Depends(user)):
@@ -175,7 +188,29 @@ def create_app(settings=None):
 
     @app.post("/api/v1/auth/session")
     def login(body:dict,request:Request,response:Response):
-        rate("login:"+request.client.host,10)
+        username = str(body.get("username", ""))[:256]
+        current = time.time()
+        limits = (("ip:" + request.client.host, 30), ("account:" + username.strip().casefold(), 10))
+        with service.db.tx() as c:
+            c.execute(delete(D.login_limits).where(D.login_limits.c.expires <= current))
+            for identity, maximum in limits:
+                bucket = sha(identity.encode())
+                entry = row(c, select(D.login_limits).where(D.login_limits.c.bucket == bucket))
+                if entry and entry["attempts"] >= maximum:
+                    raise DomainError("RATE_LIMIT", "Too many sign-in attempts; retry later", 429)
+                if entry:
+                    c.execute(update(D.login_limits).where(D.login_limits.c.bucket == bucket).values(attempts=entry["attempts"]+1))
+                else:
+                    c.execute(D.login_limits.insert().values(bucket=bucket, expires=current+60, attempts=1))
+        try:
+            return authenticate(body, response)
+        except DomainError as exc:
+            if exc.code == "LOGIN_FAILED":
+                with service.db.tx() as c:
+                    service.audit(c, "anonymous", "LOGIN_FAILED", sha(username.casefold().encode()), result="DENIED")
+            raise
+
+    def authenticate(body: dict, response: Response):
         with service.db.tx() as c:
             u=row(c,select(D.users).where(D.users.c.username==str(body.get("username",""))))
             valid=False
@@ -272,7 +307,16 @@ def create_app(settings=None):
     def collectors(u=Depends(user)):
         with service.db.read() as c:
             result=rows(c,select(D.collectors))
+            scope = service.scope_evidence(u)
+            source_query = select(D.evidence.c.collector_id, D.evidence.c.source_type,
+                                  func.max(D.evidence.c.received_at).label("last_received"))
+            if scope is not None:
+                source_query = source_query.where(scope)
+            sources = {}
+            for item in rows(c, source_query.group_by(D.evidence.c.collector_id, D.evidence.c.source_type)):
+                sources.setdefault(item["collector_id"], []).append(item)
             for r in result:
+                r["sources"] = sources.get(r["id"], [])
                 r.pop("token_hash",None);r["health"]=loads(r["health"],{});r["configuration"]=loads(r["configuration"],{})
                 r["online"]=bool(r["last_heartbeat"] and time.time()-datetime.fromisoformat(r["last_heartbeat"].replace("Z","+00:00")).timestamp()<90)
             return result

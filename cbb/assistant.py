@@ -79,7 +79,10 @@ def analyze_case(service,payload):
                 response=client.post(url+"/api/chat",json={"model":model,"stream":False,"format":Advice.model_json_schema(),"keep_alive":0,"options":{"temperature":0,"num_ctx":4096,"num_predict":1200},"messages":[{"role":"system","content":system},{"role":"user","content":dumps({"question":question,"untrusted_observations":relevant})}]});response.raise_for_status()
                 if len(response.content)>128*1024:raise ValueError("Model output too large")
                 advice=Advice.model_validate_json(response.json()["message"]["content"]).model_dump()
-        except (httpx.HTTPError,ValueError,KeyError) as ex:raise DomainError("AI_UNAVAILABLE","Local model request failed or returned invalid structured output. Check Ollama/model availability; no fallback output is presented as LLM analysis.",503) from ex
+        except httpx.TimeoutException as ex:
+            raise DomainError("AI_TIMEOUT", "The local model exceeded its request deadline", 504) from ex
+        except (httpx.HTTPError, ValueError, KeyError) as ex:
+            raise DomainError("AI_UNAVAILABLE", "Local model unavailable or response unreadable. Check Ollama and the configured model.", 503) from ex
         allowed={r["evidence_id"] for r in relevant}
         if any(not f["evidence_ids"] or not set(f["evidence_ids"])<=allowed for f in advice["findings"]):raise DomainError("AI_CITATION","Model returned an unsupported evidence citation; output rejected",422)
         advice["limitations"].append("Language-model output can be incorrect. Valid IDs do not prove that a claim is supported. Human review is required.")

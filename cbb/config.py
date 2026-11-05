@@ -10,9 +10,11 @@ class Settings:
     database_url: str = field(default_factory=lambda: os.getenv("CBB_DATABASE_URL", ""))
     public_url: str = field(default_factory=lambda: os.getenv("CBB_PUBLIC_URL", "http://127.0.0.1:8765"))
     secure_cookies: bool = field(default_factory=lambda: os.getenv("CBB_SECURE_COOKIES", "false").lower() == "true")
+    admin_mfa_required: bool = field(default_factory=lambda: os.getenv("CBB_ADMIN_MFA_REQUIRED", "false").lower() == "true")
     workers: bool = field(default_factory=lambda: os.getenv("CBB_WORKERS", "true").lower() == "true")
     segment_bytes: int = 64 * 1024 * 1024
     checkpoint_seconds: int = 300
+    export_timeout_seconds: int = 1800
     max_event_bytes: int = 65536
     max_batch_bytes: int = 1048576
     max_artifact_bytes: int = 4 * 1024**3

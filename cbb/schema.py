@@ -99,4 +99,10 @@ def normalize(wire, collector, evidence_id, received_at, raw_ref):
     # Only bounded normalized fields enter the envelope; raw bytes remain authoritative.
     alert=details.get("alert") if isinstance(details.get("alert"),dict) else {}
     summary=str(details.get("summary") or alert.get("signature") or details.get("message") or event_type)[:300]
+    if occurred and parse_time(received_at):
+        elapsed = (datetime.fromisoformat(received_at) - datetime.fromisoformat(occurred)).total_seconds()
+        if elapsed > 120:
+            flags.append("DELAYED_EVENT")
+        elif elapsed < -30:
+            flags.append("SOURCE_CLOCK_AHEAD")
     return {"schema_version":"cbb.evidence/1.0","evidence_id":evidence_id,"collector_id":collector["id"],"asset_id":collector["asset_id"],"boot_id":wire["boot_id"],"source_seq":wire["source_seq"],"source_type":wire["source_type"],"event_type":event_type,"occurred_at":occurred,"original_timestamp":wire.get("original_timestamp"),"collected_at":wire["collected_at"],"received_at":received_at,"time_quality":{"parsed":occurred is not None},"severity":severity,"subject":subject,"summary":summary,"parser":{"name":wire["source_type"],"version":"1.0.0"},"raw":raw_ref,"provenance":{"source_cursor":wire.get("source_cursor",{})},"quality_flags":flags}
