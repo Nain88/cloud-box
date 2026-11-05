@@ -2,7 +2,7 @@
 
 Editable source for a dual-deployment FYP evidence preservation and investigation platform. Windows Virtual Mode and Linux Cloud Mode share the API, data model and web interface. No hardware mode is included.
 
-The November Windows release includes a native Suricata/Npcap sensor, Windows Firewall evidence, a polling Live monitor, and local Ollama case analysis. Use [the Roman Urdu walkthrough](docs/WINDOWS-LIVE-DEMO.md) and [the acceptance audit](docs/LIVE-ACCEPTANCE.md) for the tested laptop setup and coverage limits.
+The November Windows release includes a native Suricata/Npcap sensor, Windows Firewall evidence, a polling Live monitor, and local Ollama case analysis. Use [(docs/WINDOWS-LIVE-DEMO.md) and [the acceptance audit](docs/LIVE-ACCEPTANCE.md) for the tested laptop setup and coverage limits.
 
 ## Start on this Windows computer
 
